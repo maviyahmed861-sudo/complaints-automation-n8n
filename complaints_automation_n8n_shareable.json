@@ -1,0 +1,397 @@
+{
+  "name": "Complaints automation - CRM API + Easy Remit API",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## AUTOMATIC RUN (every 24 hours)\nFinds new Home Remittance complaints in the CRM, checks Easy Remit, saves the status in Message, emails the customer, then marks the complaint as done. 'Run now (test)' starts the same flow with one click.",
+        "height": 150,
+        "width": 2000,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "209f8bf9-ec65-4334-a79c-c2001a3b3cfc",
+      "name": "Note AUTOMATIC RUN (every 24 hours)"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        16,
+        144
+      ],
+      "id": "90b305f2-f351-4df1-85a0-ae7bcf552ad2",
+      "name": "Every 24 hours (9:00 AM)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        336
+      ],
+      "id": "8e83ca3b-283e-474e-bfaa-59123805b139",
+      "name": "Run now (test)"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR-API-URL/api/complaints",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "Home Remittance"
+            },
+            {
+              "name": "message_empty",
+              "value": "true"
+            },
+            {
+              "name": "email_sent",
+              "value": "false"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        288,
+        240
+      ],
+      "id": "85e9a730-66b3-4c7d-8ecd-0544450a813b",
+      "name": "Get new complaints from CRM"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn items.map((it, i) => ({ json: it.json, pairedItem: { item: i } })).filter(x => x.json && x.json.complaint_number);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        240
+      ],
+      "id": "97891529-7f9e-4a4d-95e4-fcaa3346aefe",
+      "name": "Keep real complaints"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://YOUR-API-URL/api/remittances/' + encodeURIComponent($json.txn) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        768,
+        240
+      ],
+      "id": "1ee55b7b-98bd-4ee3-a049-e6e28dcb386d",
+      "name": "Check status on Easy Remit"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const c = $('Keep real complaints').item.json;\nconst r = $json;\nconst status = r.found ? r.status : 'NOT FOUND';\nconst checked = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';\n\n// Text saved in the CRM Message box\nlet message = 'Remittance status: ' + status + ' | Ref: ' + c.txn;\nif (r.found) message += ' | Amount: ' + r.amount + ' | Bank ref: ' + r.bankRef + ' | ' + r.note;\nelse message += ' | No remittance found for this reference.';\nmessage += ' | Checked: ' + checked;\n\n// Email\nconst head = 'Dear ' + c.name + ',\\n\\n' +\n  'This is in reference to your complaint number ' + c.complaint_number + '.\\n\\n' +\n  'Upon receipt of your complaint, we have carried out an inquiry and would like to inform you that ';\nconst sign = '\\n\\nRegards,\\nCustomer Complaints Team';\n\nlet subject, body;\nif (status === 'CREDITED') {\n  subject = 'Complaint ' + c.complaint_number + ': your remittance has been credited';\n  body = head + 'your remittance amount has been credited. However, we regret the inconvenience caused to you, if any.' + sign;\n} else if (status === 'NOT CREDITED' || status === 'PENDING') {\n  subject = 'Complaint ' + c.complaint_number + ': your remittance has not been credited';\n  body = head + 'your remittance amount has not been credited. Therefore, you are requested to kindly contact your remitter in this regard.' + sign;\n} else {\n  subject = 'Complaint ' + c.complaint_number + ': remittance reference not found';\n  body = head + 'we could not find a remittance against the reference number provided (' + c.txn + '). You are requested to kindly verify the reference number with your remitter and share it with us again.' + sign;\n}\n\nreturn { json: { complaint_number: c.complaint_number, name: c.name, email: c.email, txn: c.txn, status, message, subject, body } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        240
+      ],
+      "id": "cc8118d1-4e8e-4fd6-aabf-1e30f5d46764",
+      "name": "Build message and email"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://YOUR-API-URL/api/complaints/' + $json.complaint_number }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: $json.message }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1248,
+        240
+      ],
+      "id": "26b04ac0-1d87-4fbc-a6ad-4bc2e9021bae",
+      "name": "Save Message in CRM"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Build message and email').item.json.email }}",
+        "subject": "={{ $('Build message and email').item.json.subject }}",
+        "emailType": "text",
+        "message": "={{ $('Build message and email').item.json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1488,
+        240
+      ],
+      "id": "a7ffc5fd-27c7-4e39-84d4-1c37a750a0ce",
+      "name": "Email customer"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://YOUR-API-URL/api/complaints/' + $('Build message and email').item.json.complaint_number }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ email_sent: true }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1728,
+        240
+      ],
+      "id": "df95c636-3fad-44b5-8504-c040f5fb7e07",
+      "name": "Mark email sent"
+    },
+    {
+      "parameters": {
+        "content": "## TEST RESET (optional)\nClick 'Reset demo' to clear all Home Remittance messages, mark them as not emailed, and set every email to the test address so you can run the demo again safely.",
+        "height": 130,
+        "width": 1100,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        608
+      ],
+      "id": "aa5073e2-3c09-49f6-a42a-2eadf5b19a50",
+      "name": "Note TEST RESET (optional)"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR-API-URL/api/complaints",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "Home Remittance"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        288,
+        736
+      ],
+      "id": "5bbf4942-195c-4959-b6c8-ec9c1d9f78ce",
+      "name": "Get all Home Remittance complaints"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://YOUR-API-URL/api/complaints/' + $json.complaint_number }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: '', email_sent: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        528,
+        736
+      ],
+      "id": "ede8c73d-1b36-4354-8b1e-2eaf52888ec7",
+      "name": "Reset complaint"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 24 hours (9:00 AM)": {
+      "main": [
+        [
+          {
+            "node": "Get new complaints from CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now (test)": {
+      "main": [
+        [
+          {
+            "node": "Get new complaints from CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get new complaints from CRM": {
+      "main": [
+        [
+          {
+            "node": "Keep real complaints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep real complaints": {
+      "main": [
+        [
+          {
+            "node": "Check status on Easy Remit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check status on Easy Remit": {
+      "main": [
+        [
+          {
+            "node": "Build message and email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build message and email": {
+      "main": [
+        [
+          {
+            "node": "Save Message in CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Message in CRM": {
+      "main": [
+        [
+          {
+            "node": "Email customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email customer": {
+      "main": [
+        [
+          {
+            "node": "Mark email sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all Home Remittance complaints": {
+      "main": [
+        [
+          {
+            "node": "Reset complaint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}
